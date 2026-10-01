@@ -1,0 +1,7 @@
+# לא מעלים לאינטרנט:
+.venv/
+__pycache__/
+cache/
+backtest_results/
+*.bat
+_*_tmp.py

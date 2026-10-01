@@ -1,0 +1,67 @@
+# קרנות סל (ETF) פופולריות - רשימה שנבחרה ידנית. אפשר להוסיף/למחוק שורות.
+
+# שוק רחב
+SPY
+VOO
+VTI
+QQQ
+DIA
+IWM
+MDY
+RSP
+VT
+
+# סקטורים
+XLK
+XLF
+XLE
+XLV
+XLI
+XLY
+XLP
+XLU
+XLB
+XLRE
+XLC
+
+# תעשיות ונושאים
+SMH
+SOXX
+XBI
+KRE
+ITB
+XRT
+IGV
+ARKK
+
+# אג"ח
+TLT
+IEF
+SHY
+AGG
+BND
+LQD
+HYG
+TIP
+EMB
+
+# סחורות
+GLD
+SLV
+USO
+UNG
+DBC
+GDX
+URA
+
+# בינלאומי
+EFA
+EEM
+VWO
+FXI
+EWJ
+EWZ
+INDA
+EWG
+EIS
+KWEB

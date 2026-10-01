@@ -1,0 +1,8 @@
+# עיצוב האתר: רקע כהה, צבעים "קרים" (כחול לכפתורים, תכלת/ירוק להדגשות).
+# Streamlit קורא את הקובץ הזה כשמפעילים את האתר מתוך תיקיית הפרויקט.
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"
+backgroundColor = "#05070a"
+secondaryBackgroundColor = "#0f141b"
+textColor = "#e6edf3"
