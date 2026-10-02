@@ -5,6 +5,7 @@ import pandas as pd
 
 import settings
 from channels import CHANNEL_KISSES, CHANNEL_OPTIONS, channel_signals
+from triangles import TRIANGLE_KISSES, TRIANGLE_OPTIONS, triangle_signals
 from data import fetch_many, is_crypto, load_assets
 from indicators import add_indicators, sma_col
 from levels import BREAKOUT, KISS, RESISTANCE, SR_OPTIONS, SUPPORT, find_swings, sr_signals
@@ -90,21 +91,22 @@ def scan_symbol(df, symbol, lookback=None, swing_atr=settings.SWING_MIN_MOVE_ATR
                 "vol_ratio": row["VolRatio"],
                 "cci": row["CCI"],
             })
-    swings = find_swings(df, swing_atr)  # פעם אחת - משמש גם אזורים וגם תעלות
+    swings = find_swings(df, swing_atr)  # פעם אחת - משמש אזורים, תעלות ומשולשים
     sr_rows = sr_signals(df, symbol, lookback, swing_atr, zone_atr, swings)
     channel_rows = channel_signals(df, symbol, lookback, swing_atr, swings)
-    return crosses, sr_rows, channel_rows, latest_row(df, symbol)
+    triangle_rows = triangle_signals(df, symbol, lookback, swing_atr, swings)
+    return crosses, sr_rows, channel_rows, triangle_rows, latest_row(df, symbol)
 
 
 def scan_all(symbols=None, lookback=None, progress=None, refresh=False,
              swing_atr=settings.SWING_MIN_MOVE_ATR, zone_atr=settings.ZONE_WIDTH_ATR):
     """סורק את כל הנכסים. progress(חלק 0..1, טקסט) מעדכן פס התקדמות.
-    מחזיר מילון: crosses / sr / channels / latest (טבלאות),
+    מחזיר מילון: crosses / sr / channels / triangles / latest (טבלאות),
     errors / skipped (רשימות של (סימול, סיבה))."""
     if symbols is None:  # רק כשלא נמסרה רשימה בכלל. רשימה ריקה = אין מה לסרוק.
         symbols = load_assets()
     frames, errors = fetch_many(symbols, progress, refresh)
-    crosses, sr_rows, channel_rows, latest, skipped = [], [], [], [], []
+    crosses, sr_rows, channel_rows, triangle_rows, latest, skipped = [], [], [], [], [], []
     min_candles = settings.SMA_LONG + 1
     for n, symbol in enumerate(list(frames), 1):
         if progress and (n % 20 == 0 or n == len(frames)):
@@ -118,17 +120,18 @@ def scan_all(symbols=None, lookback=None, progress=None, refresh=False,
             skipped.append((symbol, problem))
             continue
         try:
-            symbol_crosses, symbol_sr, symbol_channels, symbol_latest = scan_symbol(
-                df, symbol, lookback, swing_atr, zone_atr)
+            symbol_crosses, symbol_sr, symbol_channels, symbol_triangles, symbol_latest = \
+                scan_symbol(df, symbol, lookback, swing_atr, zone_atr)
             crosses.extend(symbol_crosses)
             sr_rows.extend(symbol_sr)
             channel_rows.extend(symbol_channels)
+            triangle_rows.extend(symbol_triangles)
             latest.append(symbol_latest)
         except Exception as e:
             errors.append((symbol, str(e)))
     return dict(crosses=pd.DataFrame(crosses), sr=pd.DataFrame(sr_rows),
-                channels=pd.DataFrame(channel_rows), latest=pd.DataFrame(latest),
-                errors=errors, skipped=skipped)
+                channels=pd.DataFrame(channel_rows), triangles=pd.DataFrame(triangle_rows),
+                latest=pd.DataFrame(latest), errors=errors, skipped=skipped)
 
 
 # --- סינון התוצאות (מהיר - בלי להוריד ובלי לחשב מחדש) ---
@@ -215,12 +218,12 @@ def filter_sr(table, options, window, min_touches=settings.SR_MIN_TOUCHES,
 
 def filter_channels(table, option, window, near_range=settings.SR_NEAR_RANGE,
                     cci_range=None, vol_min=None):
-    """איתותי תעלה מסוג אחד: פריצה/שבירה - ב-window הנרות האחרונים;
+    """איתותי מבנה (תעלה או משולש) מסוג אחד: פריצה/שבירה - ב-window הנרות האחרונים;
     נשיקה - הנר האחרון במרחק בטווח near_range (%) מהקו. אחרי מסנני CCI / ווליום."""
     if table.empty:
         return table
     table = table[table["option"] == option]
-    if option in CHANNEL_KISSES:
+    if option in CHANNEL_KISSES or option in TRIANGLE_KISSES:
         table = table[table["dist_pct"].between(*near_range)]
     else:
         table = table[table["days_ago"] < window]
@@ -242,6 +245,9 @@ def criterion_matches(res, name, window, min_touches=settings.SR_MIN_TOUCHES,
     if name in CHANNEL_OPTIONS:
         return filter_channels(res.get("channels", pd.DataFrame()), name, window, near_range,
                                cci_range, vol_min)
+    if name in TRIANGLE_OPTIONS:
+        return filter_channels(res.get("triangles", pd.DataFrame()), name, window, near_range,
+                               cci_range, vol_min)
     if name in SR_OPTIONS:
         breakouts, kisses = filter_sr(res["sr"], [name], window, min_touches, near_range,
                                       touch_vol_min, cci_range, vol_min)
@@ -254,13 +260,13 @@ def best_per_symbol(table, name):
     ביותר); חצייה - החדשה ביותר. מחזיר טבלה שהאינדקס שלה הוא הסימול."""
     if table.empty:
         return pd.DataFrame(index=pd.Index([], name="symbol"))
-    if name in CHANNEL_KISSES:
+    if name in CHANNEL_KISSES or name in TRIANGLE_KISSES:
         table = table.sort_values("dist_pct")
     elif name in SR_OPTIONS and SR_OPTIONS[name][0] == KISS:
         table = table.sort_values(["dist_pct", "touches"], ascending=[True, False])
     elif name in SR_OPTIONS:
         table = table.sort_values(["days_ago", "touches", "touch_vol"], ascending=[True, False, False])
-    elif name in CHANNEL_OPTIONS:
+    elif name in CHANNEL_OPTIONS or name in TRIANGLE_OPTIONS:
         table = table.sort_values("days_ago")
     else:
         table = table.sort_values("days_ago")

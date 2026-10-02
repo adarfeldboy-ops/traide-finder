@@ -10,6 +10,9 @@ from plotly.subplots import make_subplots
 
 import settings
 from channels import CHANNEL_KISSES, CHANNEL_OPTIONS, active_channel, channel_at, line_at
+from triangles import (TRIANGLE_INFO, TRIANGLE_KISSES, TRIANGLE_OPTIONS, active_triangles,
+                       triangle_at)
+from triangles import line_at as triangle_line
 from data import fetch, is_crypto, load_assets
 from indicators import add_indicators, sma_col
 from levels import KISS, RES_BREAK, SR_OPTIONS, SUP_BREAK, SUPPORT, chart_zones, find_swings
@@ -23,7 +26,7 @@ SMA_PERIODS = (settings.SMA_SHORT, settings.SMA_MID, settings.SMA_LONG)
 GREEN, RED, CYAN, NEON = "#22c55e", "#ef4444", "#22d3ee", "#39ff88"
 BG, PANEL = "#05070a", "#0b0f14"
 SMA_COLORS = dict(zip(SMA_PERIODS, ("#facc15", "#3b82f6", "#c084fc")))
-RESULTS_VERSION = 5  # עולה כשמבנה התוצאות משתנה - תוצאות ישנות בזיכרון נזרקות
+RESULTS_VERSION = 6  # עולה כשמבנה התוצאות משתנה - תוצאות ישנות בזיכרון נזרקות
 CCI_MANUAL = "טווח ידני"
 CCI_WITH_SIGNAL = "בכיוון האיתות"
 MATCH_LABELS = {"כל התנאים (וגם)": MATCH_ALL, "לפחות אחד (או)": MATCH_ANY}
@@ -120,6 +123,14 @@ def describe(name, hit):
     """תיאור קצר של מה שהתאים לתנאי אחד בנכס אחד ("—" = לא התאים)."""
     if hit is None:
         return "—"
+    if name in TRIANGLE_OPTIONS:
+        touches = f"{hit['low_touches']}+{hit['high_touches']} נגיעות"
+        if name in TRIANGLE_KISSES:
+            line = "מהקו התחתון" if "התחתון" in name else "מהקו העליון"
+            return (f"{hit['pattern']} · {touches} · {hit['dist_pct']:.1f}% {line} · "
+                    f"קודקוד בעוד {hit['apex_in']:.0f} נרות")
+        volume = "" if pd.isna(hit["vol_ratio"]) else f" · ווליום ×{hit['vol_ratio']:.1f}"
+        return f"{ago(hit['days_ago'])} · {touches}{volume}"
     if name in CHANNEL_OPTIONS:
         touches = f"{hit['low_touches']}+{hit['high_touches']} נגיעות"
         if name in CHANNEL_KISSES:
@@ -164,6 +175,26 @@ def format_channel_table(table):
     return add_sma_columns(out, table)
 
 
+def format_triangle_table(table):
+    """טבלת איתותי משולש (לפירוט)."""
+    out = pd.DataFrame({
+        "נכס": table["symbol"],
+        "איתות": table["option"],
+        "תאריך": table["date"],
+        "לפני (נרות)": table["days_ago"],
+        "קו תחתון": price(table["lower"]),
+        "קו עליון": price(table["upper"]),
+        "נגיעות (תחתון+עליון)": table["low_touches"].astype(str) + "+" + table["high_touches"].astype(str),
+        "שיפוע תחתון % ל-20 נרות": table["lower_slope_pct_20"].round(1),
+        "שיפוע עליון % ל-20 נרות": table["upper_slope_pct_20"].round(1),
+        "קודקוד בעוד (נרות)": table["apex_in"].round(0),
+        "התחלה": table["start_date"],
+        "מרחק %": table["dist_pct"].round(2),
+        "סגירה": price(table["close"]),
+    })
+    return add_sma_columns(out, table)
+
+
 def cell_color(value):
     """צבע לתא: ▲ / מספר חיובי = ירוק, ▼ / מספר שלילי = אדום."""
     if isinstance(value, str):
@@ -196,13 +227,31 @@ def format_latest_table(table):
     return add_sma_columns(out, table)
 
 
+def triangle_lines(df, swings, triangle_exits):
+    """[(משולש, יום אחרון לציור)] לגרף: המשולש כפי שהיה ביום הפריצה/שבירה (לכל סוג שיש
+    לו יציאה בתוצאות), ואחרת המשולשים הפעילים כעת."""
+    dates = list(df.index.date)
+    found = []
+    for kind, tri in active_triangles(df, swings).items():
+        if kind not in triangle_exits:
+            found.append((tri, len(df)))
+    for kind, day in triangle_exits.items():
+        if day in dates:
+            exit_day = dates.index(day)
+            tri = triangle_at(df, swings, exit_day, kind)
+            if tri:
+                found.append((tri, exit_day + 1))
+    return found
+
+
 def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_atr,
-               channel_date=None):
+               channel_date=None, triangle_exits=None):
     """גרף בשלוש קומות: נרות + ממוצעים + אזורים, ווליום, CCI.
     marks = טבלה עם date / close / direction לסימון איתותים (חציות ופריצות).
     האזורים נבחרים באותם כללים כמו בטבלאות (נגיעות, ווליום בנגיעות, הגדרות הסריקה).
     channel_date = תאריך פריצה/שבירה של תעלה: מציירים את התעלה כפי שהייתה ביום הזה
-    (אחרי היציאה היא כבר לא פעילה). None = התעלה הפעילה כעת, אם יש."""
+    (אחרי היציאה היא כבר לא פעילה). None = התעלה הפעילה כעת, אם יש.
+    triangle_exits = {סוג משולש: תאריך יציאה} - אותו רעיון למשולשים."""
     zones = chart_zones(df, min_touches, touch_vol_min, min_move_atr=swing_atr, zone_atr=zone_atr)
     swings = find_swings(df, swing_atr)
     first_shown = max(len(df) - CHART_CANDLES, 0)
@@ -214,6 +263,7 @@ def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_at
         full_len = exit_day + 1  # הקווים עד יום היציאה
     else:
         channel = active_channel(df, swings)
+    triangles = triangle_lines(df, swings, triangle_exits or {})
     df = df.tail(CHART_CANDLES)
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                         row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
@@ -231,6 +281,14 @@ def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_at
         for which, name in (("low", "תעלה - קו תחתון"), ("high", "תעלה - קו עליון")):
             fig.add_trace(go.Scatter(x=x, y=[line_at(channel, p, which) for p in pos], name=name,
                                      line=dict(color=CYAN, width=2, dash="dash")), row=1, col=1)
+    for tri, end in triangles:
+        # שני קווי המשולש מתחילתו (או מתחילת הגרף) עד הנר האחרון / יום היציאה
+        pos = list(range(max(tri["start"], first_shown), end))
+        x = df.index[[p - first_shown for p in pos]]
+        for which, side in (("low", "קו תחתון"), ("high", "קו עליון")):
+            fig.add_trace(go.Scatter(x=x, y=[triangle_line(tri, p, which) for p in pos],
+                                     name=f"{tri['kind']} - {side}",
+                                     line=dict(color=NEON, width=2, dash="dot")), row=1, col=1)
     for zone, kind in zones:
         color = GREEN if kind == SUPPORT else RED
         fig.add_hrect(y0=zone["low"], y1=zone["high"], fillcolor=color, opacity=0.15,
@@ -347,12 +405,19 @@ with st.sidebar:
              "שיאים. כל שפל גבוה מהקודם וכל שיא גבוה מהקודם, ולפחות 2 נגיעות בכל קו.  \n"
              "נשיקה = המחיר כעת קרוב לקו (מעל התחתון / מתחת לעליון).  \n"
              "פריצה / שבירה = הסגירה הראשונה מחוץ לתעלה.")
+    triangle_choices = st.pills(
+        "משולשים מתכנסים", TRIANGLE_OPTIONS, selection_mode="multi", key="triangle_choices",
+        help="משולש סימטרי = קו עליון יורד (שיאים נמוכים יותר) וקו תחתון עולה (שפלים גבוהים "
+             "יותר).  \nמשולש עולה = קו עליון שטוח (התנגדות אופקית) וקו תחתון עולה.  \n"
+             "בשניהם הקווים מתכנסים לקודקוד, ולפחות 2 נגיעות בכל קו.  \n"
+             "נשיקה = המחיר בתוך המשולש וקרוב לקו. פריצה / שבירה = הסגירה הראשונה מחוצה לו.")
     kiss_chosen = (any(SR_OPTIONS[c][0] == KISS for c in sr_choices)
-                   or any(c in CHANNEL_KISSES for c in channel_choices))
+                   or any(c in CHANNEL_KISSES for c in channel_choices)
+                   or any(c in TRIANGLE_KISSES for c in triangle_choices))
     near_range = st.slider("💋 טווח נשיקה (% מהאזור / מהקו)", 0.0, settings.SR_NEAR_MAX_PCT,
                            settings.SR_NEAR_RANGE, 0.5, disabled=not kiss_chosen,
-                           help="כמה רחוק מקצה האזור או מקו התעלה המחיר יכול להיות כדי "
-                                "להיחשב 'נשיקה'. משותף לאזורים ולתעלה.")
+                           help="כמה רחוק מקצה האזור או מקו התעלה / המשולש המחיר יכול להיות "
+                                "כדי להיחשב 'נשיקה'. משותף לכולם.")
     st.divider()
 
     st.markdown("### 📊 CCI")
@@ -421,7 +486,7 @@ if use_cci:
     cci_filter = CCI_DIRECTION if cci_mode == CCI_WITH_SIGNAL else tuple(cci_range)
 vol_filter = vol_min if use_volume else None
 touch_filter = touch_vol_min if use_touch_vol else None
-criteria = list(sma_choices) + list(sr_choices) + list(channel_choices)
+criteria = list(sma_choices) + list(sr_choices) + list(channel_choices) + list(triangle_choices)
 unified = latest = pd.DataFrame()
 found = {}  # כל המופעים לכל תנאי (לפירוט ולגרף)
 
@@ -487,6 +552,10 @@ else:
         if channel_choices:
             notes.append(f"תעלה עולה: נגיעות = שפלים על הקו התחתון + שיאים על העליון; "
                          f"נשיקה = {near_range[0]}%-{near_range[1]}% מהקו.")
+        if triangle_choices:
+            notes.append("משולשים: נגיעות = שפלים על הקו התחתון + שיאים על העליון; "
+                         f"נשיקה = {near_range[0]}%-{near_range[1]}% מהקו מבפנים; "
+                         "'קודקוד בעוד' = בעוד כמה נרות הקווים נפגשים.")
         if sr_choices:
             notes.append(f"אזורים עם {min_touches} נגיעות לפחות"
                          + (f" וווליום ממוצע ≥ ×{touch_vol_min:.1f} בנגיעות" if use_touch_vol else "")
@@ -508,6 +577,8 @@ else:
                         st.write("—")
                     elif name in CHANNEL_OPTIONS:
                         show_df(format_channel_table(found[name]))
+                    elif name in TRIANGLE_OPTIONS:
+                        show_df(format_triangle_table(found[name]))
                     elif name in SR_OPTIONS:
                         show_df(format_zone_table(found[name], SR_OPTIONS[name][0] == KISS))
                     else:
@@ -529,11 +600,11 @@ else:
     symbol = st.selectbox("בחר/י נכס", options)
     st.caption("פסים ירוקים = אזורי תמיכה, אדומים = התנגדות (הקרובים שעדיין מחזיקים). "
                "קווים מקווקווים בתכלת = תעלה עולה פעילה (או, בפריצה/שבירה - התעלה שנפרצה, "
-               "עד יום היציאה).")
+               "עד יום היציאה). קווים מנוקדים בירוק = משולש (אותו כלל).")
     # סימון החציות והפריצות של הנכס (לנשיקות אין סימון - רואים את האזור / הקו עצמו)
     marks = [t[t["symbol"] == symbol][["date", "close", "direction"]]
              for name, t in found.items()
-             if not t.empty and name not in CHANNEL_KISSES
+             if not t.empty and name not in CHANNEL_KISSES and name not in TRIANGLE_KISSES
              and not (name in SR_OPTIONS and SR_OPTIONS[name][0] == KISS)]
     marks = pd.concat(marks) if any(not m.empty for m in marks) else pd.DataFrame()
     # הגרף משתמש באותן הגדרות כמו הסריקה האחרונה, כדי שיתאים לטבלאות
@@ -545,8 +616,17 @@ else:
              if name in CHANNEL_OPTIONS and name not in CHANNEL_KISSES and not t.empty]
     exits = pd.concat(exits) if exits else pd.DataFrame()
     channel_date = None if exits.empty else exits.sort_values("days_ago")["date"].iloc[0]
+    # אותו דבר למשולשים: לכל סוג משולש שנפרץ/נשבר - יום היציאה החדש ביותר
+    triangle_exits = {}
+    for name, t in found.items():
+        if name in TRIANGLE_OPTIONS and name not in TRIANGLE_KISSES and not t.empty:
+            mine = t[t["symbol"] == symbol]
+            kind = TRIANGLE_INFO[name][0]
+            if not mine.empty and kind not in triangle_exits:
+                triangle_exits[kind] = mine.sort_values("days_ago")["date"].iloc[0]
     try:
         st.plotly_chart(make_chart(load_chart_frame(symbol), symbol, marks, min_touches,
-                                   touch_filter, chart_swing, chart_zone, channel_date), theme=None)
+                                   touch_filter, chart_swing, chart_zone, channel_date,
+                                   triangle_exits), theme=None)
     except Exception as e:
         st.error(f"לא הצלחתי לטעון את {symbol}: {e}")

@@ -58,13 +58,19 @@ def find_swings(df, min_move_atr=settings.SWING_MIN_MOVE_ATR):
     highs, lows = df["High"].to_numpy(), df["Low"].to_numpy()
     atr = df["ATR"].to_numpy()
     swings = []
+    if len(df) <= 2 * bars:
+        return swings
+    # המקסימום/המינימום של כל חלון של bars נרות - מחושב פעם אחת לכל הימים (מהיר מלולאה).
+    # win_max[k] = הגבוה ביותר בנרות k..k+bars-1, כך שהנרות שלפני p = win_max[p-bars]
+    # והנרות שאחרי p = win_max[p+1].
+    win_max = np.lib.stride_tricks.sliding_window_view(highs, bars).max(axis=1)
+    win_min = np.lib.stride_tricks.sliding_window_view(lows, bars).min(axis=1)
     for p in range(bars, len(df) - bars):
         if np.isnan(atr[p]):
             continue
         move = min_move_atr * atr[p]  # ATR ביום p - ידוע כבר ביום p
-        before, after = slice(p - bars, p), slice(p + 1, p + bars + 1)
-        is_top = highs[p] > highs[before].max() and highs[p] >= highs[after].max()
-        is_bottom = lows[p] < lows[before].min() and lows[p] <= lows[after].min()
+        is_top = highs[p] > win_max[p - bars] and highs[p] >= win_max[p + 1]
+        is_bottom = lows[p] < win_min[p - bars] and lows[p] <= win_min[p + 1]
         for is_high, ok, price in ((True, is_top, highs[p]), (False, is_bottom, lows[p])):
             if ok:
                 confirmed = confirm_swing(highs, lows, p, is_high, move)
@@ -79,8 +85,9 @@ def swing_width(swing, zone_atr=settings.ZONE_WIDTH_ATR):
     """רוחב אזור סביב נקודת מפנה: חלק מה-ATR ביום שלה, בין ZONE_MIN_PCT ל-ZONE_MAX_PCT
     מהמחיר. נקבע לפי נקודת המפנה עצמה - כך גבולות האזור לא זזים מיום ליום."""
     price, atr = swing[1], swing[4]
-    return float(np.clip(zone_atr * atr, price * settings.ZONE_MIN_PCT / 100,
-                         price * settings.ZONE_MAX_PCT / 100))
+    # כמו np.clip, אבל על מספר בודד - הרבה יותר מהיר (הפונקציה נקראת מאות אלפי פעמים בסריקה)
+    return float(min(max(zone_atr * atr, price * settings.ZONE_MIN_PCT / 100),
+                     price * settings.ZONE_MAX_PCT / 100))
 
 
 def tolerances(df):
@@ -143,7 +150,7 @@ def mean_ignore_nan(values):
     return float(np.mean(values)) if values else np.nan
 
 
-def held_zone(df, closes, tol, low, high, members, i, kind):
+def held_zone(df, closes, tol, low, high, members, i, kind, vol=None):
     """האזור בתפקיד kind ביום i, אם הוא "מחזיק" ויש לו מספיק נגיעות - אחרת None.
 
     התנגדות: נגיעות = שיאים באזור (מוכרים הפכו את המחיר למטה), שקרו אחרי הסגירה
@@ -161,24 +168,27 @@ def held_zone(df, closes, tol, low, high, members, i, kind):
     touches = count_touches([s[0] for s in members if s[3] == is_high and s[0] >= since])
     if len(touches) < settings.SR_MIN_TOUCHES:
         return None
+    vol = df["VolRatio"].to_numpy() if vol is None else vol
     return {
         "low": low,
         "high": high,
         "touches": len(touches),
         "first": touches[0],
         "last": touches[-1],
-        "touch_vol": mean_ignore_nan(df["VolRatio"].to_numpy()[touches]),  # ווליום בנרות הנגיעה
+        "touch_vol": mean_ignore_nan(vol[touches]),  # ווליום בנרות הנגיעה
     }
 
 
-def zones_at(df, swings, i, zone_atr=settings.ZONE_WIDTH_ATR, tol=None):
-    """[(אזור, סוג)] - כל האזורים שמחזיקים ביום i (על סמך מה שידוע עד יום i-1)."""
-    closes = df["Close"].to_numpy()
+def zones_at(df, swings, i, zone_atr=settings.ZONE_WIDTH_ATR, tol=None, closes=None, vol=None):
+    """[(אזור, סוג)] - כל האזורים שמחזיקים ביום i (על סמך מה שידוע עד יום i-1).
+    closes / vol = עמודות Close / VolRatio כמערכים (אפשר להעביר מראש - חוסך זמן בלולאות)."""
+    closes = df["Close"].to_numpy() if closes is None else closes
+    vol = df["VolRatio"].to_numpy() if vol is None else vol
     tol = tolerances(df) if tol is None else tol
     found = []
     for low, high, members in find_ranges(swings, i, zone_atr):
         for kind in (RESISTANCE, SUPPORT):
-            zone = held_zone(df, closes, tol, low, high, members, i, kind)
+            zone = held_zone(df, closes, tol, low, high, members, i, kind, vol)
             if zone:
                 found.append((zone, kind))
     return found
@@ -257,6 +267,7 @@ def sr_signals(df, symbol, lookback=None, min_move_atr=settings.SWING_MIN_MOVE_A
     lookback = lookback or settings.LOOKBACK_DAYS
     swings = find_swings(df, min_move_atr) if swings is None else swings
     closes = df["Close"].to_numpy()
+    vol = df["VolRatio"].to_numpy()
     tol = tolerances(df)
     current = closes[-1]
     rows = []
@@ -269,7 +280,7 @@ def sr_signals(df, symbol, lookback=None, min_move_atr=settings.SWING_MIN_MOVE_A
     first_reported = len(df) - lookback
     start = max(settings.SWING_BARS + 1, first_reported - settings.BREAK_MEMORY_BARS)
     for i in range(start, len(df)):
-        for zone, kind in zones_at(df, swings, i, zone_atr, tol):
+        for zone, kind in zones_at(df, swings, i, zone_atr, tol, closes, vol):
             if kind == RESISTANCE:
                 is_break, edge = closes[i] > zone["high"] + tol[i], zone["high"]
             else:
