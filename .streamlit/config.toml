@@ -1,8 +1,37 @@
-# עיצוב האתר: רקע כהה, צבעים "קרים" (כחול לכפתורים, תכלת/ירוק להדגשות).
+# עיצוב האתר SWING MASTER: כהה ומאופק, צבע הדגשה אחד (כחול), גבולות דקים במקום זוהר.
 # Streamlit קורא את הקובץ הזה כשמפעילים את האתר מתוך תיקיית הפרויקט.
+# אותם צבעים מוגדרים גם ב-app.py (בלוק ה-CSS והגרף) - לשנות בשני המקומות.
+#   רקע #0f1114 · משטח #181b20 · סרגל צד #14171b · קו גבול #262b33
+#   טקסט #e6e8eb · טקסט משני #a4abb6 · הדגשה #3987e5 · חיובי #0ca30c · שלילי #e66767
+#   כפתור ראשי / בחירה: #2b6fc8 (גוון כהה יותר של ההדגשה - טקסט לבן עליו בניגודיות ≥ 4.5)
 [theme]
 base = "dark"
-primaryColor = "#3b82f6"
-backgroundColor = "#05070a"
-secondaryBackgroundColor = "#0f141b"
-textColor = "#e6edf3"
+primaryColor = "#2b6fc8"
+backgroundColor = "#0f1114"
+secondaryBackgroundColor = "#181b20"
+textColor = "#e6e8eb"
+linkColor = "#6aa6ee"
+borderColor = "#262b33"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"
+buttonRadius = "6px"
+baseFontSize = 15
+font = "Heebo:https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap, sans-serif"
+headingFontSizes = ["1.9rem", "1.3rem", "1.05rem"]
+headingFontWeights = [800, 600, 600]
+dataframeBorderColor = "#262b33"
+dataframeHeaderBackgroundColor = "#181b20"
+greenColor = "#0ca30c"
+redColor = "#e66767"
+blueColor = "#3987e5"
+# הודעות (אזהרה / מידע) - שקטות, בלי צבע צועק
+yellowBackgroundColor = "#1d1b15"
+yellowTextColor = "#d8c48f"
+blueBackgroundColor = "#121a25"
+blueTextColor = "#a9c6ec"
+
+[theme.sidebar]
+backgroundColor = "#14171b"
+secondaryBackgroundColor = "#1b1f25"
+headingFontSizes = ["1.2rem", "1rem", "0.95rem"]
