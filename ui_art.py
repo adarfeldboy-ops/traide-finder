@@ -49,6 +49,9 @@ ICONS = {
     # לשונית משולש עולה: קו עליון שטוח וקו תחתון עולה
     "tri_asc": svg(f'<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="20" x2="21" y2="6"/>'
                    f'<circle cx="21" cy="6" r="1.6" fill="{ACCENT}" stroke="none"/>'),
+    # קאפ אנד הנדל: ספל בצורת U, ידית קטנה מימין, וקו נקודת הפריצה מעליהם
+    "cup": svg(f'<line x1="2" y1="6" x2="22" y2="6" stroke="{SOFT}" stroke-width="1.1" stroke-dasharray="2 2"/>'
+               f'<path d="M3 6 C3.5 18 13.5 18 14 6"/><path d="M14 6 C15.5 9 18 9.5 20.5 7.5"/>'),
     # טווח נשיקה: מחיר שיורד, נוגע בקו ועולה חזרה
     "kiss": svg(f'<line x1="3" y1="17.5" x2="21" y2="17.5"/>'
                 f'<path d="M3 5 C7 6 9 15 12 15.6 C15 15 17 9 21 7" stroke="{SOFT}"/>'
@@ -82,6 +85,7 @@ ICON_TARGETS = {
     ".st-key-exp_triangle summary p": "triangle",
     ".st-key-exp_triangle [data-testid='stTab']:nth-of-type(1) p": "tri_sym",
     ".st-key-exp_triangle [data-testid='stTab']:nth-of-type(2) p": "tri_asc",
+    ".st-key-exp_cup summary p": "cup",
     ".st-key-exp_near summary p": "kiss",
     ".st-key-exp_cci summary p": "cci",
     ".st-key-exp_volume summary p": "volume",
@@ -121,36 +125,107 @@ def icons_css():
     return "\n".join(rules)
 
 
+# --- כותרת ראשית: באמצע, ומאחוריה "שוק חי" - תעלה עולה לרוחב כל העמוד, קו מחיר שזורם בתוכה,
+#     וחיצים: ירוקים עולים ואדומים יורדים. הכול בתנועת transform / opacity בלבד (קל למעבד הגרפי).
+UP_ARROW = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 16" fill="none" stroke="#0ca30c" '
+            'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 15 V3"/>'
+            '<path d="M2.5 7.5 L7 3 L11.5 7.5"/></svg>')
+DOWN_ARROW = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 16" fill="none" stroke="#e66767" '
+              'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1 V13"/>'
+              '<path d="M2.5 8.5 L7 13 L11.5 8.5"/></svg>')
+# קו מחיר שחוזר על עצמו כל 400 פיקסלים (מתחיל ונגמר באותו גובה - כך התנועה רציפה בלי קפיצה)
+PRICE_LINE = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 80" fill="none" stroke="{ACCENT}" '
+              'stroke-width="1.6" stroke-linejoin="round"><polyline points="0,52 40,40 70,56 110,30 140,44 '
+              '180,22 210,38 250,26 290,48 330,30 365,46 400,52"/></svg>')
+ALL_SVGS.update(up_arrow=UP_ARROW, down_arrow=DOWN_ARROW, price_line=PRICE_LINE)
+
+# חיצים ברקע: (עולה?, מיקום אופקי %, משך שניות, השהיה שניות) - פזורים לרוחב, בקצבים שונים
+HERO_ARROWS = [(True, 4, 6.5, 0), (False, 9, 7.5, 2.5), (True, 15, 5.5, 4), (False, 21, 8, 1),
+               (True, 27, 7, 3), (False, 33, 6, 5), (True, 39, 8, 1.5), (False, 45, 6.5, 3.5),
+               (True, 55, 6, 0.5), (False, 61, 7, 4.5), (True, 67, 7.5, 2), (False, 73, 6, 0),
+               (True, 79, 6.5, 5), (False, 85, 7.5, 2), (True, 91, 5.5, 3.5), (False, 96, 7, 1)]
+
+
 def header_css(text, muted):
-    """עיצוב הלוגו והכותרת: סמל + SWING (לבן) MASTER (כחול בהדרגה), ושורת הסבר."""
+    """הכותרת הראשית: לוגו + SWING MASTER באמצע, ורקע מונפש של שוק (תעלה, קו מחיר, חיצים)."""
     return f"""
-.sm-head {{margin: 0 0 16px;}}
-.sm-brand {{display: flex; align-items: center; justify-content: flex-end; gap: 14px;}}
-.sm-mark {{width: 52px; height: 52px; flex: none;
+.sm-hero {{position: relative; height: 200px; margin: 0 0 20px; display: flex; align-items: center;
+           justify-content: center; overflow: hidden; border: 1px solid #262b33; border-radius: 12px;
+           background: linear-gradient(180deg, #121821 0%, #0f1114 100%);}}
+.sm-hero-bg {{position: absolute; inset: 0; pointer-events: none;}}
+.sm-chan {{position: absolute; left: -6%; right: -6%; top: 50%; height: 120px;
+           transform: translateY(-50%) rotate(-3deg);}}
+.sm-chan-line {{position: absolute; left: 0; right: 0; height: 1px;
+                background: linear-gradient(90deg, rgba(57,135,229,0), rgba(57,135,229,.5) 15%,
+                            rgba(57,135,229,.5) 85%, rgba(57,135,229,0));}}
+.sm-top {{top: 0;}}
+.sm-bot {{bottom: 0;}}
+.sm-price {{position: absolute; left: 0; top: 20px; height: 80px; width: calc(100% + 400px); opacity: .45;
+            background: url("{data_uri(PRICE_LINE)}") left center / 400px 80px repeat-x;
+            animation: sm-flow 24s linear infinite; will-change: transform;}}
+.sm-arr {{position: absolute; width: 13px; height: 15px; opacity: 0; will-change: transform, opacity;
+          background: center / contain no-repeat; animation: 6s ease-in-out infinite;}}
+.sm-arr.up {{bottom: 10px; background-image: url("{data_uri(UP_ARROW)}"); animation-name: sm-rise;}}
+.sm-arr.down {{top: 10px; background-image: url("{data_uri(DOWN_ARROW)}"); animation-name: sm-fall;}}
+@keyframes sm-flow {{from {{transform: translateX(0);}} to {{transform: translateX(-400px);}}}}
+@keyframes sm-rise {{0% {{transform: translateY(0); opacity: 0;}} 20%, 70% {{opacity: .55;}}
+                     100% {{transform: translateY(-84px); opacity: 0;}}}}
+@keyframes sm-fall {{0% {{transform: translateY(0); opacity: 0;}} 20%, 70% {{opacity: .5;}}
+                     100% {{transform: translateY(84px); opacity: 0;}}}}
+@keyframes sm-rise-m {{0% {{transform: translateY(0); opacity: 0;}} 20%, 70% {{opacity: .55;}}
+                       100% {{transform: translateY(-60px); opacity: 0;}}}}
+@keyframes sm-fall-m {{0% {{transform: translateY(0); opacity: 0;}} 20%, 70% {{opacity: .5;}}
+                       100% {{transform: translateY(60px); opacity: 0;}}}}
+/* מאחורי הטקסט: "הילה" כהה רכה, כדי שהכותרת תמיד תהיה קריאה מעל האנימציה */
+.sm-hero-center {{position: relative; z-index: 1; text-align: center; padding: 18px 40px;
+                  background: radial-gradient(ellipse at center, rgba(15,17,20,.94) 0%,
+                              rgba(15,17,20,.82) 55%, rgba(15,17,20,0) 78%);}}
+.sm-brand {{display: flex; align-items: center; justify-content: center; gap: 16px;}}
+.sm-mark {{width: 60px; height: 60px; flex: none;
            background: url("{data_uri(LOGO)}") center / contain no-repeat;}}
 .sm-word {{margin: 0; padding: 0; line-height: 1; font-weight: 800;
-           font-size: clamp(1.75rem, 4.4vw, 2.75rem); letter-spacing: 0.02em; color: {text};}}
-.sm-word .w2 {{margin-left: 0.28em; color: #3987e5;}}
+           font-size: clamp(2.1rem, 6vw, 3.6rem); letter-spacing: 0.04em; color: {text};}}
+.sm-word .w2 {{margin-left: 0.3em; color: #3987e5;}}
 /* צבע בהדרגה רק בדפדפן שתומך בזה - אחרת נשאר כחול אחיד (ולא טקסט שקוף שלא רואים) */
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {{
   .sm-word .w2 {{background: linear-gradient(90deg, #3987e5, #7fb3f0);
                 -webkit-background-clip: text; background-clip: text; color: transparent;}}
 }}
-.sm-rule {{height: 2px; width: 100%; max-width: 330px; margin: 10px 0 0 auto; border-radius: 2px;
-           background: linear-gradient(270deg, #3987e5, rgba(57,135,229,0));}}
-.sm-head .sm-sub {{margin-top: 8px; color: {muted};}}
+.sm-rule {{height: 2px; width: 120px; margin: 12px auto 0; border-radius: 2px;
+           background: linear-gradient(90deg, rgba(57,135,229,0), #3987e5, rgba(57,135,229,0));}}
+.sm-hero .sm-sub {{margin: 10px 0 0; text-align: center; color: {muted}; letter-spacing: 0.02em;}}
 @media (max-width: 640px) {{
+  .sm-hero {{height: 150px; margin-bottom: 14px; border-radius: 10px;}}
+  .sm-chan {{height: 96px;}}
+  .sm-price {{top: 8px;}}
+  .sm-arr:nth-of-type(even) {{display: none;}}      /* בטלפון - חצי מהחיצים */
+  /* התעלה נמוכה יותר בטלפון - החיצים זזים פחות, כדי להישאר בתוכה */
+  .sm-arr.up {{animation-name: sm-rise-m;}}
+  .sm-arr.down {{animation-name: sm-fall-m;}}
+  .sm-hero-center {{padding: 12px 16px;}}
   .sm-mark {{width: 40px; height: 40px;}}
   .sm-brand {{gap: 10px;}}
-  .sm-rule {{max-width: 220px;}}
+  .sm-rule {{width: 90px; margin-top: 8px;}}
+  .sm-hero .sm-sub {{font-size: 0.78rem; margin-top: 6px;}}
+}}
+@media (prefers-reduced-motion: reduce) {{
+  .sm-price, .sm-arr {{animation: none;}}
+  .sm-arr {{opacity: .35;}}
 }}"""
 
 
 def header_html(tagline):
-    # הלוגו משמאל לימין (שם באנגלית), אבל מיושר לצד ימין של העמוד
-    return (f'<div class="sm-head"><div class="sm-brand" dir="ltr"><span class="sm-mark"></span>'
+    # הלוגו משמאל לימין (שם באנגלית) ובמרכז העמוד; הרקע המונפש מוסתר מקוראי מסך
+    arrows = "".join(
+        f'<span class="sm-arr {"up" if up else "down"}" '
+        f'style="left:{x}%;animation-duration:{dur}s;animation-delay:-{delay}s"></span>'
+        for up, x, dur, delay in HERO_ARROWS)
+    return (f'<div class="sm-hero"><div class="sm-hero-bg" aria-hidden="true"><div class="sm-chan">'
+            f'<div class="sm-chan-line sm-top"></div><div class="sm-chan-line sm-bot"></div>'
+            f'<div class="sm-price"></div>{arrows}</div></div>'
+            f'<div class="sm-hero-center"><div class="sm-brand" dir="ltr"><span class="sm-mark"></span>'
             f'<h1 class="sm-word"><span class="w1">SWING</span><span class="w2">MASTER</span></h1></div>'
-            f'<div class="sm-rule"></div><p class="sm-sub">{tagline}</p></div>')
+            f'<div class="sm-rule"></div><p class="sm-sub">{tagline}</p></div></div>')
 
 
 def loader_css():

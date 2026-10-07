@@ -14,6 +14,7 @@ from channels import CHANNEL_KISSES, CHANNEL_OPTIONS, active_channel, channel_at
 from triangles import (TRIANGLE_INFO, TRIANGLE_KISSES, TRIANGLE_OPTIONS, TRIANGLE_TYPES,
                        active_triangles, triangle_at)
 from triangles import line_at as triangle_line
+from cups import CUP_NAME, CUP_OPTIONS, CUP_STATES, STATE_ALL, STATE_BEFORE, STATE_BREAKOUT
 from data import fetch, is_crypto, load_assets
 from indicators import add_indicators, sma_col
 from levels import (KISS, RES_BREAK, RESISTANCE, SR_OPTIONS, SUP_BREAK, SUPPORT, chart_zones,
@@ -35,6 +36,7 @@ GRID = "#1c2026"                                            # קווי רשת ב
 # צבעי הקווים בגרף - לפי סדר קבוע שנבדק לעיוורון צבעים (כחול, כתום, טורקיז, צהוב, מגנטה)
 SMA_COLORS = dict(zip(SMA_PERIODS, ("#3987e5", "#d95926", "#199e70")))
 CHANNEL_COLOR, TRIANGLE_COLOR = "#c98500", "#d55181"
+CUP_COLOR = "#d6dae0"  # קאפ אנד הנדל: אפור-לבן ניטרלי - לא מתנגש בצבעי הסדרות ובירוק/אדום
 FONT = "Heebo, 'Segoe UI', Arial, sans-serif"
 
 RESULTS_VERSION = 6  # עולה כשמבנה התוצאות משתנה - תוצאות ישנות בזיכרון נזרקות
@@ -42,7 +44,9 @@ CCI_MANUAL = "טווח ידני"
 CCI_WITH_SIGNAL = "בכיוון האיתות"
 MATCH_LABELS = {"כל התנאים (וגם)": MATCH_ALL, "לפחות אחד (או)": MATCH_ANY}
 
-st.set_page_config(page_title=APP_NAME, page_icon=":material/candlestick_chart:", layout="wide")
+# initial_sidebar_state="auto": במחשב הסרגל פתוח, בטלפון סגור עד שלוחצים על החץ
+st.set_page_config(page_title=APP_NAME, page_icon=":material/candlestick_chart:", layout="wide",
+                   initial_sidebar_state="auto")
 
 
 def inject_css():
@@ -74,6 +78,28 @@ hr {{border-color: {BORDER};}}
   [data-testid="stCaptionContainer"] {{font-size: 0.8rem;}}
   section[data-testid="stSidebar"] {{max-width: 88vw;}}
   [data-testid="stHorizontalBlock"] {{flex-wrap: wrap;}}
+}}
+/* הפס העליון של Streamlit: שקוף ולא חוסם לחיצות. (כפתור Deploy והתפריט כבויים ב-config.toml.)
+   כפתור פתיחת הסרגל יושב בתוך הפס הזה - לכן לא מסתירים את הפס, רק מנקים אותו */
+[data-testid="stHeader"] {{background: transparent !important; box-shadow: none !important;
+                           pointer-events: none;}}
+[data-testid="stHeader"] [data-testid="stToolbar"] {{background: transparent !important;}}
+/* ...אבל הכפתורים שבו נשארים לחיצים (למשל "Stop" בזמן סריקה) */
+[data-testid="stHeader"] button, [data-testid="stHeader"] a {{pointer-events: auto;}}
+/* כפתור פתיחת הסרגל: חץ ברור בפינה השמאלית העליונה, יעד לחיצה של 44 פיקסלים */
+[data-testid="stExpandSidebarButton"] {{pointer-events: auto; position: fixed; top: 10px; left: 10px;
+    z-index: 1000; width: 44px; height: 44px; border-radius: 10px; background: {SURFACE};
+    border: 1px solid {BORDER}; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);}}
+[data-testid="stExpandSidebarButton"] span {{color: {ACCENT} !important;}}
+[data-testid="stSidebarCollapseButton"] button {{min-width: 44px; min-height: 44px;}}
+/* טלפון / טאבלט: הסרגל סגור בהתחלה ונשלף משמאל (כמו שהוא בנוי ב-Streamlit); התוכן נשאר מימין לשמאל */
+@media (max-width: 768px) {{
+  [data-testid="stAppViewContainer"] {{direction: ltr;}}
+  [data-testid="stMain"], [data-testid="stSidebarContent"] {{direction: rtl;}}
+  [data-testid="stSidebarCollapseButton"] {{display: flex !important; visibility: visible !important;
+                                            opacity: 1 !important;}}
+  .block-container {{padding-top: 64px !important;}}  /* מקום לכפתור החץ מעל הכותרת */
 }}
 /* אייקונים בסרגל הצד, הלוגו, ואנימציית הטעינה (הציורים עצמם ב-ui_art.py) */
 {ui_art.icons_css()}
@@ -165,6 +191,13 @@ def describe(name, hit):
     """תיאור קצר של מה שהתאים לתנאי אחד בנכס אחד ("—" = לא התאים)."""
     if hit is None:
         return "—"
+    if name in CUP_OPTIONS:
+        shape = (f"{CUP_NAME} · {hit['period']} · עומק {hit['depth_pct']:.0f}% · "
+                 f"ידית {hit['handle_pct']:.0f}%")
+        if hit["state"] == STATE_BEFORE:
+            return f"{shape} · {hit['dist_pct']:.1f}% מנקודת הפריצה"
+        volume = "" if pd.isna(hit["vol_ratio"]) else f" · ווליום ×{hit['vol_ratio']:.1f}"
+        return f"▲ פריצה {ago(hit['days_ago'])} · {shape}{volume}"
     if name in TRIANGLE_OPTIONS:
         touches = f"{hit['low_touches']}+{hit['high_touches']} נגיעות"
         if name in TRIANGLE_KISSES:
@@ -237,6 +270,29 @@ def format_triangle_table(table):
     return add_sma_columns(out, table)
 
 
+def format_cup_table(table):
+    """טבלת קאפ אנד הנדל (לפירוט)."""
+    out = pd.DataFrame({
+        "נכס": table["symbol"],
+        "תקופה": table["period"],
+        "מצב": table["state"],
+        "תאריך": table["date"],
+        "לפני (נרות)": table["days_ago"],
+        "נקודת פריצה": price(table["pivot"]),
+        "מרחק %": table["dist_pct"].round(2),
+        "עומק ספל %": table["depth_pct"].round(1),
+        "עומק ידית %": table["handle_pct"].round(1),
+        "ספל (נרות)": table["cup_bars"],
+        "ידית (נרות)": table["handle_bars"],
+        "ווליום בידית": table["handle_vol"].round(2),
+        "שפה שמאלית": table["left_date"],
+        "תחתית": table["bottom_date"],
+        "שפה ימנית": table["right_date"],
+        "סגירה": price(table["close"]),
+    })
+    return add_sma_columns(out, table)
+
+
 def cell_color(value):
     """צבע לתא: ▲ = ירוק, ▼ = אדום (הסימן עצמו נושא את המשמעות גם בלי צבע)."""
     if isinstance(value, str):
@@ -288,16 +344,20 @@ def triangle_lines(df, swings, triangle_exits):
 
 
 def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_atr,
-               channel_date=None, triangle_exits=None):
+               channel_date=None, triangle_exits=None, cup=None):
     """גרף בשלוש קומות: נרות + ממוצעים + אזורים, ווליום, CCI.
     marks = טבלה עם date / close / direction לסימון איתותים (חציות ופריצות).
     האזורים נבחרים באותם כללים כמו בטבלאות (נגיעות, ווליום בנגיעות, הגדרות הסריקה).
     channel_date = תאריך פריצה/שבירה של תעלה: מציירים את התעלה כפי שהייתה ביום הזה
     (אחרי היציאה היא כבר לא פעילה). None = התעלה הפעילה כעת, אם יש.
-    triangle_exits = {סוג משולש: תאריך יציאה} - אותו רעיון למשולשים."""
+    triangle_exits = {סוג משולש: תאריך יציאה} - אותו רעיון למשולשים.
+    cup = שורת קאפ אנד הנדל מהתוצאות (או None): מציירים את הספל, הידית וקו נקודת הפריצה."""
     zones = chart_zones(df, min_touches, touch_vol_min, min_move_atr=swing_atr, zone_atr=zone_atr)
     swings = find_swings(df, swing_atr)
     first_shown = max(len(df) - CHART_CANDLES, 0)
+    if cup:  # ספל ארוך יכול להתחיל לפני 250 הנרות - מראים גם אותו
+        left = int(df.index.searchsorted(pd.Timestamp(cup["left_date"])))
+        first_shown = max(min(first_shown, left - 10), 0)
     full_len = len(df)
     dates = list(df.index.date)
     if channel_date is not None and channel_date in dates:
@@ -307,7 +367,7 @@ def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_at
     else:
         channel = active_channel(df, swings)
     triangles = triangle_lines(df, swings, triangle_exits or {})
-    df = df.tail(CHART_CANDLES)
+    df = df.iloc[first_shown:]
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                         row_heights=[0.6, 0.2, 0.2], vertical_spacing=0.03)
 
@@ -335,6 +395,22 @@ def make_chart(df, symbol, marks, min_touches, touch_vol_min, swing_atr, zone_at
             fig.add_trace(go.Scatter(x=x, y=[triangle_line(tri, p, which) for p in pos],
                                      name=tri["kind"], legendgroup=tri["kind"], showlegend=k == 0,
                                      line=dict(color=TRIANGLE_COLOR, width=1.5)), row=1, col=1)
+    if cup:
+        # הספל: קו מעוגל משפה לשפה דרך התחתית; הידית: מהשפה הימנית לשפל הידית ועד היום האחרון;
+        # ונקודת הפריצה: קו אופקי מהשפה הימנית ימינה
+        end_date = pd.Timestamp(cup["date"])
+        cup_x = [pd.Timestamp(cup[k]) for k in ("left_date", "bottom_date", "right_date")]
+        cup_y = [cup["left_price"], cup["bottom_price"], cup["right_price"]]
+        fig.add_trace(go.Scatter(x=cup_x, y=cup_y, mode="lines+markers", name=CUP_NAME,
+                                 line=dict(color=CUP_COLOR, width=2, shape="spline", smoothing=1.3),
+                                 marker=dict(size=6, color=CUP_COLOR)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[cup_x[2], pd.Timestamp(cup["handle_low_date"]), end_date],
+                                 y=[cup["right_price"], cup["handle_low_price"], cup["close"]],
+                                 mode="lines", name="ידית", showlegend=False,
+                                 line=dict(color=CUP_COLOR, width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[cup_x[2], max(end_date, df.index[-1])], y=[cup["pivot"]] * 2,
+                                 mode="lines", name=f"נקודת פריצה {one_price(cup['pivot'])}",
+                                 line=dict(color=CUP_COLOR, width=1, dash="dash")), row=1, col=1)
     for kind, color in ((SUPPORT, POS), (RESISTANCE, NEG)):
         mine = [z for z, k in zones if k == kind]
         for zone in mine:
@@ -513,9 +589,21 @@ with st.sidebar:
                                    label_visibility="collapsed", format_func=short(f"{kind} – "))
         triangle_choices = [o for o in TRIANGLE_OPTIONS if o in picked]  # סדר קבוע
 
+    with st.expander(label(CUP_NAME, len(ss.get("cup_choices") or [])), key="exp_cup"):
+        st.caption("ספל בצורת U אחרי עלייה, שפה ימנית ליד גובה השמאלית, וידית קטנה בחצי העליון. "
+                   "נקודת הפריצה = השיא של הידית. התקופה = משך הספל: קצרה 1-6 חודשים, "
+                   "בינונית 6-12 חודשים, ארוכה שנה ומעלה.")
+        cup_state = st.segmented_control("מצב", list(CUP_STATES), default=STATE_ALL, key="cup_state",
+                                         help="לפני פריצה: הידית קיימת והמחיר מתחת לנקודת הפריצה (בטווח "
+                                              "הנשיקה). פריצה: סגירה ראשונה מעל נקודת הפריצה, בחלון "
+                                              "האיתותים.") or STATE_ALL
+        cup_choices = st.pills(CUP_NAME, CUP_OPTIONS, selection_mode="multi", key="cup_choices",
+                               label_visibility="collapsed", format_func=short(f"{CUP_NAME} – "))
+
     kiss_chosen = (any(SR_OPTIONS[c][0] == KISS for c in sr_choices)
                    or any(c in CHANNEL_KISSES for c in channel_choices)
-                   or any(c in TRIANGLE_KISSES for c in triangle_choices))
+                   or any(c in TRIANGLE_KISSES for c in triangle_choices)
+                   or (bool(cup_choices) and cup_state != STATE_BREAKOUT))
 
     section("מסננים")
     near_now = ss.get("near_range", settings.SR_NEAR_RANGE)
@@ -608,7 +696,8 @@ if use_cci:
     cci_filter = CCI_DIRECTION if cci_mode == CCI_WITH_SIGNAL else tuple(cci_range)
 vol_filter = vol_min if use_volume else None
 touch_filter = touch_vol_min if use_touch_vol else None
-criteria = list(sma_choices) + list(sr_choices) + list(channel_choices) + list(triangle_choices)
+criteria = (list(sma_choices) + list(sr_choices) + list(channel_choices) + list(triangle_choices)
+            + [o for o in CUP_OPTIONS if o in cup_choices])
 unified = latest = pd.DataFrame()
 found = {}  # כל המופעים לכל תנאי (לפירוט ולגרף)
 
@@ -661,12 +750,12 @@ else:
                           if cci_filter == CCI_DIRECTION else ""),
                        latest, format_latest_table)
         else:
-            st.info("בחר/י בסרגל הצד מה לחפש: חצייה, פריצה, נשיקה, תעלה או משולש - "
+            st.info("בחר/י בסרגל הצד מה לחפש: חצייה, פריצה, נשיקה, תעלה, משולש או ספל - "
                     "או הפעל/י מסנן CCI / ווליום כדי לסנן את כל הנכסים.")
 
     if criteria:
         unified, found = combine_signals(res, criteria, window, match, min_touches, near_range,
-                                         touch_filter, cci_filter, vol_filter)
+                                         touch_filter, cci_filter, vol_filter, cup_state)
         how = "בכל התנאים" if match == MATCH_ALL else "לפחות באחד מהתנאים"
         notes = [f"נכסים שעומדים {how}: " + " · ".join(criteria) + ".",
                  f"חציות ופריצות - ב-{window} הנרות האחרונים (מוצגת החדשה ביותר). "
@@ -678,6 +767,9 @@ else:
             notes.append("משולשים: נגיעות = שפלים על הקו התחתון + שיאים על העליון; "
                          f"נשיקה = {near_range[0]}%-{near_range[1]}% מהקו מבפנים; "
                          "'קודקוד בעוד' = בעוד כמה נרות הקווים נפגשים.")
+        if cup_choices:
+            notes.append(f"{CUP_NAME} ({cup_state}): לפני פריצה = המחיר {near_range[0]}%-{near_range[1]}% "
+                         f"מתחת לנקודת הפריצה; פריצה = סגירה ראשונה מעליה ב-{window} הנרות האחרונים.")
         if sr_choices:
             notes.append(f"אזורים עם {min_touches} נגיעות לפחות"
                          + (f" וווליום ממוצע ≥ ×{touch_vol_min:.1f} בנגיעות" if use_touch_vol else "")
@@ -701,6 +793,8 @@ else:
                         show_df(format_channel_table(found[name]))
                     elif name in TRIANGLE_OPTIONS:
                         show_df(format_triangle_table(found[name]))
+                    elif name in CUP_OPTIONS:
+                        show_df(format_cup_table(found[name]))
                     elif name in SR_OPTIONS:
                         show_df(format_zone_table(found[name], SR_OPTIONS[name][0] == KISS))
                     else:
@@ -746,10 +840,14 @@ else:
             kind = TRIANGLE_INFO[name][0]
             if not mine.empty and kind not in triangle_exits:
                 triangle_exits[kind] = mine.sort_values("days_ago")["date"].iloc[0]
+    # קאפ אנד הנדל: אם הנכס נבחר בגללו - מציירים את הספל (החדש ביותר) מתוך שורת התוצאה
+    cup_rows = [t[t["symbol"] == symbol] for name, t in found.items() if name in CUP_OPTIONS and not t.empty]
+    cup_rows = pd.concat(cup_rows) if cup_rows else pd.DataFrame()
+    cup = None if cup_rows.empty else cup_rows.sort_values(["days_ago", "dist_pct"]).iloc[0].to_dict()
     try:
         st.plotly_chart(make_chart(load_chart_frame(symbol), symbol, marks, min_touches,
                                    touch_filter, chart_swing, chart_zone, channel_date,
-                                   triangle_exits), theme=None, width="stretch",
+                                   triangle_exits, cup), theme=None, width="stretch",
                         config={"responsive": True, "displaylogo": False})
     except Exception as e:
         st.error(f"לא הצלחתי לטעון את {symbol}: {e}")

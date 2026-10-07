@@ -6,6 +6,7 @@ import pandas as pd
 import settings
 from channels import CHANNEL_KISSES, CHANNEL_OPTIONS, channel_signals
 from triangles import TRIANGLE_KISSES, TRIANGLE_OPTIONS, triangle_signals
+from cups import CUP_OPTIONS, STATE_ALL, STATE_BEFORE, STATE_BREAKOUT, cup_signals
 from data import fetch_many, is_crypto, load_assets
 from indicators import add_indicators, sma_col
 from levels import BREAKOUT, KISS, RESISTANCE, SR_OPTIONS, SUPPORT, find_swings, sr_signals
@@ -95,18 +96,19 @@ def scan_symbol(df, symbol, lookback=None, swing_atr=settings.SWING_MIN_MOVE_ATR
     sr_rows = sr_signals(df, symbol, lookback, swing_atr, zone_atr, swings)
     channel_rows = channel_signals(df, symbol, lookback, swing_atr, swings)
     triangle_rows = triangle_signals(df, symbol, lookback, swing_atr, swings)
-    return crosses, sr_rows, channel_rows, triangle_rows, latest_row(df, symbol)
+    cup_rows = cup_signals(df, symbol, lookback, swing_atr, swings)
+    return crosses, sr_rows, channel_rows, triangle_rows, cup_rows, latest_row(df, symbol)
 
 
 def scan_all(symbols=None, lookback=None, progress=None, refresh=False,
              swing_atr=settings.SWING_MIN_MOVE_ATR, zone_atr=settings.ZONE_WIDTH_ATR):
     """סורק את כל הנכסים. progress(חלק 0..1, טקסט) מעדכן פס התקדמות.
-    מחזיר מילון: crosses / sr / channels / triangles / latest (טבלאות),
+    מחזיר מילון: crosses / sr / channels / triangles / cups / latest (טבלאות),
     errors / skipped (רשימות של (סימול, סיבה))."""
     if symbols is None:  # רק כשלא נמסרה רשימה בכלל. רשימה ריקה = אין מה לסרוק.
         symbols = load_assets()
     frames, errors = fetch_many(symbols, progress, refresh)
-    crosses, sr_rows, channel_rows, triangle_rows, latest, skipped = [], [], [], [], [], []
+    crosses, sr_rows, channel_rows, triangle_rows, cup_rows, latest, skipped = [], [], [], [], [], [], []
     min_candles = settings.SMA_LONG + 1
     for n, symbol in enumerate(list(frames), 1):
         if progress and (n % 20 == 0 or n == len(frames)):
@@ -120,18 +122,20 @@ def scan_all(symbols=None, lookback=None, progress=None, refresh=False,
             skipped.append((symbol, problem))
             continue
         try:
-            symbol_crosses, symbol_sr, symbol_channels, symbol_triangles, symbol_latest = \
+            symbol_crosses, symbol_sr, symbol_channels, symbol_triangles, symbol_cups, symbol_latest = \
                 scan_symbol(df, symbol, lookback, swing_atr, zone_atr)
             crosses.extend(symbol_crosses)
             sr_rows.extend(symbol_sr)
             channel_rows.extend(symbol_channels)
             triangle_rows.extend(symbol_triangles)
+            cup_rows.extend(symbol_cups)
             latest.append(symbol_latest)
         except Exception as e:
             errors.append((symbol, str(e)))
     return dict(crosses=pd.DataFrame(crosses), sr=pd.DataFrame(sr_rows),
                 channels=pd.DataFrame(channel_rows), triangles=pd.DataFrame(triangle_rows),
-                latest=pd.DataFrame(latest), errors=errors, skipped=skipped)
+                cups=pd.DataFrame(cup_rows), latest=pd.DataFrame(latest), errors=errors,
+                skipped=skipped)
 
 
 # --- סינון התוצאות (מהיר - בלי להוריד ובלי לחשב מחדש) ---
@@ -231,6 +235,20 @@ def filter_channels(table, option, window, near_range=settings.SR_NEAR_RANGE,
     return table.sort_values(["days_ago", "symbol"]).reset_index(drop=True)
 
 
+def filter_cups(table, option, window, near_range=settings.SR_NEAR_RANGE, state=STATE_ALL,
+                cci_range=None, vol_min=None):
+    """קאפ אנד הנדל בתקופה אחת. "לפני פריצה" - הנר האחרון, במרחק בטווח near_range (%) מתחת
+    לנקודת הפריצה; "פריצה" - ב-window הנרות האחרונים; "הכל" - שניהם. אחרי מסנני CCI / ווליום."""
+    if table.empty:
+        return table
+    table = table[table["option"] == option]
+    before = (table["state"] == STATE_BEFORE) & table["dist_pct"].between(*near_range)
+    broke = (table["state"] == STATE_BREAKOUT) & (table["days_ago"] < window)
+    table = table[(before if state != STATE_BREAKOUT else False) | (broke if state != STATE_BEFORE else False)]
+    table = apply_filters(table, cci_range, vol_min)
+    return table.sort_values(["days_ago", "symbol"]).reset_index(drop=True)
+
+
 # --- טבלה אחת לכל התנאים שנבחרו ---
 
 MATCH_ALL = "all"  # נכס חייב לעמוד בכל התנאים (וגם)
@@ -240,8 +258,11 @@ LATEST_COLUMNS = ["close", "cci", "vol_ratio"] + [f"above_{sma_col(p)}" for p in
 
 def criterion_matches(res, name, window, min_touches=settings.SR_MIN_TOUCHES,
                       near_range=settings.SR_NEAR_RANGE, touch_vol_min=None,
-                      cci_range=None, vol_min=None):
-    """כל המופעים של תנאי אחד (חצייה / פריצה / נשיקה / תעלה) שעוברים את המסננים."""
+                      cci_range=None, vol_min=None, cup_state=STATE_ALL):
+    """כל המופעים של תנאי אחד (חצייה / פריצה / נשיקה / תעלה / משולש / ספל) שעוברים את המסננים."""
+    if name in CUP_OPTIONS:
+        return filter_cups(res.get("cups", pd.DataFrame()), name, window, near_range, cup_state,
+                           cci_range, vol_min)
     if name in CHANNEL_OPTIONS:
         return filter_channels(res.get("channels", pd.DataFrame()), name, window, near_range,
                                cci_range, vol_min)
@@ -268,6 +289,8 @@ def best_per_symbol(table, name):
         table = table.sort_values(["days_ago", "touches", "touch_vol"], ascending=[True, False, False])
     elif name in CHANNEL_OPTIONS or name in TRIANGLE_OPTIONS:
         table = table.sort_values("days_ago")
+    elif name in CUP_OPTIONS:
+        table = table.sort_values(["days_ago", "dist_pct"])
     else:
         table = table.sort_values("days_ago")
     return table.drop_duplicates("symbol").set_index("symbol")
@@ -275,9 +298,10 @@ def best_per_symbol(table, name):
 
 def combine_signals(res, criteria, window, match=MATCH_ALL, min_touches=settings.SR_MIN_TOUCHES,
                     near_range=settings.SR_NEAR_RANGE, touch_vol_min=None, cci_range=None,
-                    vol_min=None):
+                    vol_min=None, cup_state=STATE_ALL):
     """טבלה אחת, שורה לכל נכס, לפי כל התנאים שנבחרו
-    (criteria = שמות חציות ו/או SR_OPTIONS ו/או CHANNEL_OPTIONS).
+    (criteria = שמות חציות ו/או SR_OPTIONS / CHANNEL_OPTIONS / TRIANGLE_OPTIONS / CUP_OPTIONS;
+    cup_state = איזה מצב של קאפ אנד הנדל נחשב: הכל / לפני פריצה / פריצה).
 
     כל תנאי מתקיים אם יש לנכס לפחות מופע אחד שעובר את המסננים (CCI / ווליום ביום
     האיתות; בנשיקה - הנר האחרון). match=MATCH_ALL: הנכס עומד בכל התנאים;
@@ -294,7 +318,7 @@ def combine_signals(res, criteria, window, match=MATCH_ALL, min_touches=settings
     found, best = {}, {}
     for name in criteria:
         found[name] = criterion_matches(res, name, window, min_touches, near_range,
-                                        touch_vol_min, cci_range, vol_min)
+                                        touch_vol_min, cci_range, vol_min, cup_state)
         best[name] = best_per_symbol(found[name], name)
 
     sets = [set(b.index) for b in best.values()]
